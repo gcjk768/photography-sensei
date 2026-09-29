@@ -12,10 +12,7 @@
 
 <sub>Editable source: [`docs/architecture.drawio`](docs/architecture.drawio) · PNG fallback: [`docs/architecture.png`](docs/architecture.png)</sub>
 
-> **Repository status:** this repo currently holds the public design docs and diagram. The working
-> vault (`bot.py`, `CLAUDE.md`, `.claude/agents/`, `08 Evals/`, `scripts/`) lives locally and has not
-> been pushed yet. Personal content (photos, chat logs, session notes, traces) is gitignored and will
-> never be published.
+> **Repository status:** the bot, agent definitions, evals and knowledge notes are all here. Personal content (photos, chat logs, session notes, traces, skill profile) is gitignored and never published.
 
 ## Why this exists
 

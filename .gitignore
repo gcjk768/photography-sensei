@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Secrets — never commit the bot token
+.env
+
+# Obsidian workspace cache (keep plugins/config if you add them, ignore local UI state)
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/cache
+
+# Secrets — any local env files
+.env.*
+!.env.example
+
+# Personal content — never publish to a public repo
+# (private photos, chat transcripts, personal critique notes, run traces)
+00 Chat Log/
+01 Sessions/
+_attachments/
+_traces/
+
+# Runtime-generated photo + trace artifacts
+# (folders above are ignored wholesale; keep a placeholder if you want the dir tracked)
+# !_attachments/.gitkeep
+# !_traces/.gitkeep
