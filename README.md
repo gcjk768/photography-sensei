@@ -1,166 +1,192 @@
 # 📸 Photo Sensei
 
+**An agentic AI photography coach: send a photo on Telegram, and a team of Claude Code subagents critiques it, teaches through a real master photographer, draws the fixes on your frame, suggests a Fujifilm film-simulation recipe, and logs your progress in an Obsidian vault.**
+
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)
+![Claude Code](https://img.shields.io/badge/Claude_Code-19_subagents-D97757?style=flat-square&logo=claude&logoColor=white)
+![Telegram](https://img.shields.io/badge/Telegram-bot-26A5E4?style=flat-square&logo=telegram&logoColor=white)
+![Obsidian](https://img.shields.io/badge/Obsidian-vault-7C3AED?style=flat-square&logo=obsidian&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/License-MIT-39D353?style=flat-square)](LICENSE)
 
-An **Obsidian vault** that is also a **Claude Code project**: send a photo via Telegram and a squad of
-AI subagents critiques it, references a world-famous photographer for *any* genre, draws annotations on
-the photo, optionally edits it, recommends a Fujifilm recipe, assigns a practice mission, and logs
-everything as linked notes — so you can watch yourself improve from enthusiast to professional.
+![Architecture](docs/architecture.drawio.svg)
 
-It is built as an **agentic architecture**, not a chatbot with extra steps: a supervisor (the Head
-Coach in `CLAUDE.md`) plans and dispatches specialist agents, every claim is **grounded in visible
-evidence**, output is **schema-validated**, a **reflection pass** runs before delivery, every photo
-emits a **run trace**, and quality is **measured** by an eval harness.
+<sub>Editable source: [`docs/architecture.drawio`](docs/architecture.drawio) · PNG fallback: [`docs/architecture.png`](docs/architecture.png)</sub>
 
-## Per-photo flow
+> **Repository status:** this repo currently holds the public design docs and diagram. The working
+> vault (`bot.py`, `CLAUDE.md`, `.claude/agents/`, `08 Evals/`, `scripts/`) lives locally and has not
+> been pushed yet. Personal content (photos, chat logs, session notes, traces) is gitignored and will
+> never be published.
 
-```
-photo → INPUT GUARDRAIL → see it yourself → classify & route (cost-aware)
-      → GROUND every claim (region/EXIF) → monitor & REPLAN if surprised
-      → annotate (mirrors the levers) → edit only if it teaches
-      → REFLECT (self-critique, mandatory) → OUTPUT GUARDRAIL (schema-validate + repair)
-      → LOG session note + update Skill Profile → assign next mission → 📸 report + trace
-```
+## Why this exists
 
-This is **defense in depth against cascading hallucination**: in a multi-agent vision pipeline a single
-wrong read would propagate into the lesson, the edit, the mission, and the trend — so grounding +
-guardrails + reflection sit between every stage. Safety/format-critical steps (schemas, file paths,
-frontmatter) are deterministic code; judgement and routing are left to the model.
+Generic "rate my photo" chatbots give vague praise and forget you by the next message. Getting better
+at photography takes specific, grounded feedback on *this* frame, a lineage to learn from, one
+deliberate practice task at a time, and a record that shows whether you're actually improving. Photo
+Sensei does that with a supervisor agent and specialist subagents, and puts guardrails at every step
+so a single wrong read of the image doesn't carry through into the lesson, the edit and the trend.
 
-## Vault structure
+## Highlights (engineering decisions)
 
-```
-./CLAUDE.md                  ← Head Coach / orchestrator (auto-loaded by Claude Code)
-./README.md
-./bot.py                     ← Telegram bridge (logs, sends annotated photos, writes traces)
-./.claude/agents/            ← the 18 agents
-./00 Dashboard.md            ← home / MOC with Dataview queries
-./00 Chat Log/               ← daily Telegram transcripts (Chat YYYY-MM-DD.md)
-./01 Sessions/               ← one rich note per photo (+ one example)
-./02 Skills/Skill Profile.md ← 7-dimension levels + history
-./03 Masters/                ← Fan Ho, Saul Leiter, _Masters Index
-./04 Recipes/                ← recipe notes + _Recipe Index
-./05 Missions/               ← _Mission Library
-./06 Theory/                 ← Exposure Triangle, Composition Basics, Reading the Histogram, Seeing Light
-./07 Gear/                   ← Fujifilm X100VI, OPPO Find N5
-./08 Evals/                  ← golden set + run_eval.py + results (the eval harness)
-./99 Templates/              ← Session/Mission templates, Agent Contract, Schemas
-./_attachments/              ← photos, *_annotated, *_edit images
-./_traces/                   ← one JSON/MD run trace per photo
-./.obsidian/                 ← Obsidian populates this
-```
+- **Deterministic code for safety, the model for judgement.** File/size/decode checks, the chat
+  allowlist, file paths and traces are plain Python in `bot.py`. Routing, critique and replanning are
+  left to the model (`CLAUDE.md` §0). Any guarantee is enforced in code, not left to model output.
+- **Defence in depth against cascading hallucination.** Each perception agent must return `EVIDENCE`
+  (a region of the frame or an EXIF field) next to its `SCORE`. A mandatory self-critique pass runs
+  before delivery, with a `critique-reflector` second opinion on low-confidence reads. The output
+  guardrail checks each agent's contract block and repairs it before anything is written to the vault
+  (`CLAUDE.md` §4b–4d, `99 Templates/Agent Contract.md`).
+- **Structured state instead of chat history.** Agents share a typed `session` object (genre, evidence,
+  scores, masters, annotations, mission, guardrails, trace), which `progress-tracker` writes to
+  schema-valid YAML frontmatter. That keeps Dataview dashboards and the eval harness in sync
+  (`99 Templates/Schemas.md`).
+- **Least-privilege subagents.** 14 of the 19 agents in `.claude/agents/` can only `Read`. Only 3 can
+  `Write` (annotation, edit, progress log) and 4 can use `Bash`. Writes only create new files: the
+  original photo is never changed, and session history is append-only.
+- **Cost-aware routing.** Only the agents a photo needs are dispatched. Exactly **one** of four
+  "master" agents runs per photo (landscape / portrait / street-light / generalist), and the coach
+  replans if `technical-analyst` flags a genre it misclassified.
+- **Render safety net.** When run headless, the nested model sometimes writes a Pillow script but
+  doesn't run it. `bot.py::_run_pending_render_scripts` runs only scripts created during *this* run,
+  and `_latest_match` only picks up images for *this* photo's filename stem, so a user never gets a
+  stale image from an earlier photo.
+- **Observable and measurable.** Every photo writes a trace to `_traces/<stamp>.json` with a `.md`
+  copy (per-stage latency, guardrail outcomes, tools used, return code). `08 Evals/run_eval.py` scores a
+  10-item golden set with 6 code-based evaluators plus an LLM judge (actionability, grounding,
+  diagnosis).
+- **Prompt-injection hardening.** Text inside a photo or a forwarded message is treated as something to
+  critique, never as a command (`bot.py::_build_photo_prompt`, `CLAUDE.md` §4c).
 
-## The 18-agent roster
+## How it works
 
-**Perception** (own one SCORE each): `composition-analyst` · `light-exposure-analyst` ·
-`colour-tone-analyst` · `subject-story-analyst` · `technical-analyst` *(flags replan if a shot is
-unusable or misclassified)*.
+1. **Photo in.** You DM the bot (or post in an allowlisted channel/group). `bot.py` downloads the
+   highest-resolution version to `_attachments/` and logs it to the daily `00 Chat Log/`.
+2. **Deterministic gates.** Checks the chat-ID allowlist (`AUTHORIZED_CHAT_IDS`), then the image
+   itself: it exists, isn't empty, is ≤ 20 MB and passes `PIL.Image.verify()`. If it fails, you get a
+   plain-language reply and a trace is written.
+3. **Headless Claude Code.** `claude -p` runs in the vault directory, so `CLAUDE.md` loads as the
+   **Head Coach** (orchestrator) with a configurable model and timeout.
+4. **Plan & dispatch.** The coach classifies the photo and routes it to the perception analysts
+   (composition, light, colour, story, technical) and one master agent that names a real photographer
+   and a specific technique. The craft agents annotate the frame and make a teaching edit only if it
+   helps explain the lesson. `fuji-recipe-advisor` suggests a film-simulation recipe.
+5. **Reflect & validate.** A self-critique checklist runs (are the levers grounded? is the praise
+   earned? is the lowest-scoring dimension coached first?), followed by contract/schema validation and
+   repair.
+6. **Log.** `progress-tracker` writes a session note and updates the 7-dimension Skill Profile.
+   `next-assignment-coach` sets the next practice mission.
+7. **Report back.** The bot sends the "Photo Coach Report", the annotated image and any teaching edit,
+   then writes the run trace.
 
-**Masters** (teach by lineage; exactly one runs per photo): `landscape-master` · `portrait-master` ·
-`street-light-master` *(Fan Ho / Leiter / HCB / Moriyama / Kertész — J's core)* ·
-`genre-master-generalist` *(every other genre)*.
+Text messages ("weekly review", "what are my habits", recipe questions) go to their own handlers
+instead of the photo pipeline. A caption containing `/post` builds an Instagram post kit instead.
 
-**Craft:** `fuji-recipe-advisor` · `edit-example-generator` · `annotation-artist` · `instagram-stylist`
-*(Instagram post kit — SEO caption, alt text, 3–5 hashtags, trend-aware music, sends/saves hook)*.
+## Tech stack
 
-**Meta:** `progress-tracker` · `next-assignment-coach` · `exif-pattern-analyst` · `curation-coach` ·
-`weekly-review-coach` · `critique-reflector` *(cross-reflection second opinion)*.
+| Layer | Tech |
+|---|---|
+| Interface | Telegram Bot API via `python-telegram-bot` (async, long polling) |
+| Orchestration | Claude Code CLI, headless (`claude -p`); `CLAUDE.md` supervisor + 19 subagents in `.claude/agents/` |
+| Image work | Pillow (annotation overlays, teaching edits, decode check), `exiftool` (EXIF mining) |
+| Knowledge / state | Obsidian vault (Markdown + YAML frontmatter), Dataview dashboards |
+| Evaluation | `08 Evals/run_eval.py`: golden CSV, code-based evaluators, LLM-as-judge |
+| Feedback loop | `scripts/ig_insights.py`: Instagram Graph API v23.0 (insights only) |
+| Runtime | Windows launcher (`Start Photo Sensei.bat`) with an auto-restart loop that kills any stale instance first, which avoids Telegram token conflicts |
 
-Each agent returns a parseable contract block (see `99 Templates/Agent Contract.md`); the Head Coach
-validates and repairs it before anything reaches the vault.
-
-## Commands (Claude Code)
-
-- **`/post [filename]`** — build an Instagram **post kit** for the latest (or a named) photo via
-  `instagram-stylist`: an SEO/keyword caption (4 registers), alt text, 3–5 niche hashtags, a
-  trend-aware music pick (with manual trend-verification steps), a sends/saves hook, and a Reels mode.
-  Reuses the photo's session critique so the kit matches it. No lyrics, no engagement bait.
-- **`/sync-insights [--dry-run]`** — pull live post performance (reach / saves / sends) via the
-  Instagram Graph API and write it into each session note's `## Post kit → Performance:` line
-  (`scripts/ig_insights.py`). Closes the post → measure → learn loop so `weekly-review-coach` can spot
-  which caption styles / sounds / formats actually earn reach. Requires IG credentials (below).
-
-## Setup
+## Getting started
 
 **Prerequisites**
-- **Claude Code** installed and authenticated (run `claude` once to log in). The bot shells out to
-  `claude -p …`.
-- **Python 3.10+** and these packages:
-  ```bash
-  pip install python-telegram-bot pillow numpy pandas
-  ```
-- **exiftool** on PATH (for EXIF mining by `exif-pattern-analyst`).
-- *(optional)* An **Ollama vision** model (`qwen2.5vl` or the current `*-vl`) as a local fallback —
-  note that text-only models cannot see images. Set `PHOTO_SENSEI_OLLAMA_VISION=qwen2.5vl` to flag it.
+- **Claude Code** installed and signed in (run `claude` once). The bot calls `claude -p …`.
+- **Python 3.10+**: `pip install python-telegram-bot pillow numpy pandas`
+- **exiftool** on PATH (used by `exif-pattern-analyst`).
+- **Obsidian** with the **Dataview** plugin (needed for the dashboard tables).
 
-**Telegram bot token**
-1. Talk to [@BotFather](https://t.me/BotFather), `/newbot`, copy the token.
-2. Don't commit it — pass it via the environment.
+**Configure.** Copy `.env.example` to `.env` (gitignored; `.env` values override existing environment
+variables):
 
-**Obsidian**
-- Open this folder as a vault.
-- Install the **Dataview** plugin (required for the Dashboard tables). Templater & Calendar are optional.
-- Try **Graph view** to see sessions wikilink to masters and recipes.
+```dotenv
+TELEGRAM_BOT_TOKEN=            # from @BotFather /newbot (required)
+AUTHORIZED_CHAT_IDS=           # comma-separated chat IDs; empty = open to anyone (not recommended)
+PHOTO_SENSEI_MODEL=            # default claude-opus-4-8
+PHOTO_SENSEI_TIMEOUT=          # seconds, default 1200 (the full pipeline takes several minutes)
+PHOTO_SENSEI_PERMISSION_MODE=  # default bypassPermissions (see limitations)
+PHOTO_SENSEI_OLLAMA_VISION=    # optional local vision model name, e.g. qwen2.5vl (logged only for now)
+IG_ACCESS_TOKEN=               # optional, for /sync-insights
+IG_USER_ID=                    # optional, for /sync-insights
+```
 
-## Run
+Send `/id` to the bot in any chat to find the chat ID to put in the allowlist.
+
+**Run**
 
 ```bash
-export TELEGRAM_BOT_TOKEN="123456:abc…"      # Windows PowerShell: $env:TELEGRAM_BOT_TOKEN="…"
-python bot.py
+python bot.py                  # or double-click "Start Photo Sensei.bat" on Windows
 ```
-Then DM your bot a photo. Optional env knobs: `PHOTO_SENSEI_MODEL` (default `claude-opus-4-8`),
-`PHOTO_SENSEI_TIMEOUT` (seconds, default 600).
 
-You can also DM **text**: "weekly review", "what are my habits", or a recipe question — the bot routes
-these to the right handler instead of the photo pipeline. Any text inside a forwarded message or image
-is treated as subject matter to critique, **never** as a command (prompt-injection defense).
+**Bot commands:** send a photo (critique), `/post [steer]` (Instagram post kit for the latest photo),
+`/id`, `/start`. **Claude Code commands:** `/post [filename]`, `/sync-insights [--dry-run]`.
 
-## Evaluate & trace
+## Project structure
 
-- **Traces** — every photo writes `_traces/<timestamp>.json` (+ a `.md` mirror): which agents ran, any
-  replan, model, per-stage latency, guardrail outcomes, tool calls, and the logged session-note path.
-- **Golden-set eval (offline)** — run before/after any change to `CLAUDE.md` or an agent to catch
-  regressions:
-  ```bash
-  cd "08 Evals"
-  python run_eval.py --dry-run        # offline smoke test against a fixture
-  python run_eval.py --limit 5        # run the coach on the first 5 golden items
-  ```
-  Code-based evaluators check the report contract, that exactly one real photographer + a named
-  technique appears, that the lowest dimension is coached first, that frontmatter is schema-valid, that
-  referenced files exist, and that the expected tool fired. An **LLM-as-judge** scores actionability,
-  grounding, and whether the planted issue was diagnosed. Results append to `08 Evals/results/`.
-- **Online** — periodically sample real sessions from `_traces/` and run the LLM-judge to watch live
-  quality.
+```
+CLAUDE.md                 Head Coach: design principles, workflow, contracts, guardrails
+bot.py                    Telegram bridge: gates, claude -p call, render safety net, traces
+.claude/agents/           19 subagents (perception · masters · craft · meta)
+.claude/commands/         /post, /sync-insights
+scripts/ig_insights.py    Instagram insights -> session notes (append-only)
+08 Evals/                 golden.csv, run_eval.py, results/
+99 Templates/             Session & Mission templates, Agent Contract, Schemas
+00 Dashboard.md           MOC with Dataview queries
+02 Skills/ … 07 Gear/     Skill Profile, Masters, Recipes, Missions, Theory, Gear notes
+01 Sessions/ _attachments/ _traces/ 00 Chat Log/   personal runtime data (gitignored)
+docs/                     architecture diagram (draw.io source, SVG, PNG)
+```
 
-## Instagram post kits & insights loop
+## Testing & quality
 
-`/post` builds a ready-to-post kit (caption + alt text + 3–5 hashtags + trend-aware music + hook),
-tuned to how Instagram ranks in 2026 (captions as light SEO, alt text/keywords drive discovery,
-sends/saves over likes, no engagement bait). The music/posting step stays **manual in-app** — no API
-can attach Instagram-library audio or detect trending sounds.
+There's no unit-test suite. Quality is checked with an **eval harness** instead:
 
-`/sync-insights` (optional) measures what actually performs and feeds it back:
 ```bash
-python scripts/ig_insights.py --dry-run        # offline preview (uses a fixture)
-python scripts/ig_insights.py --days 3         # live: pull reach/saves/sends into session notes
+cd "08 Evals"
+python run_eval.py --dry-run   # offline smoke test: all evaluators against a fixture, no model calls
+python run_eval.py --limit 5   # run the real coach on the first 5 golden items
 ```
-**Setup for live mode** (the API is for *insights*, not posting/music):
-1. A **Business or Creator** Instagram account linked to a Facebook Page.
-2. A Meta developer app with a **long-lived token** + insights permissions
-   (`instagram_content_publish` app review ≈ 2–4 weeks; rate limit ~200 calls/hour).
-3. Add to `.env` (gitignored): `IG_ACCESS_TOKEN=…` and `IG_USER_ID=…`.
 
-It matches each live post to a session note's `## Post kit` block (by permalink, else date) and fills
-the `Performance:` line with reach / saves / sends — **append-only**. Then `weekly-review-coach` can
-tell you which caption styles, sounds, and formats earn the most reach for *your* audience.
+- **Golden set:** 10 photos in `golden.csv`, each with a planted issue, phrases the report must
+  mention, a min/max score band per dimension, and the tool expected to fire.
+- **Code evaluators:** report contract · exactly one real master + named technique · lowest dimension
+  coached first · frontmatter schema-valid · referenced files exist · expected tool fired.
+- **LLM-as-judge:** actionability, grounding, and whether the planted issue was diagnosed (1–5).
+  Results are appended to `08 Evals/results/`. Run it before and after any change to `CLAUDE.md` or an
+  agent.
+- `python scripts/ig_insights.py --dry-run` previews the insights write-back from a fixture.
+
+## Design decisions & limitations
+
+- **`bypassPermissions` by default.** In headless `-p` mode nobody is there to approve Bash, so a
+  stricter mode hangs on the Pillow step. As a result, the allowlist is the main security boundary.
+  Set `AUTHORIZED_CHAT_IDS`, or switch to a stricter mode with a pre-approved allowlist in
+  `.claude/settings.json`.
+- **The render safety net runs scripts the model wrote.** It's limited to scripts created during the
+  current run, but it's still model-generated code. A sandbox (a container, or a fixed render tool with
+  typed parameters) would be the proper fix.
+- **Photos are processed one at a time.** A full run takes minutes, and updates are handled in order
+  (no job queue), so a second photo waits for the first to finish. `drop_pending_updates=False` means
+  photos sent while the bot was restarting are still processed.
+- **Traces are coarse.** `bot.py` records wall-clock and pipeline latency and infers tool use from
+  output files. Per-agent spans and replan details (`from_genre`/`to_genre`) are placeholders for now.
+- **The golden-set images aren't committed.** The eval runs offline in `--dry-run`, but a real run
+  needs you to add your own photos to `08 Evals/golden/`.
+- **Ollama vision fallback** can be configured but isn't wired into `run_claude` yet.
+- **Instagram:** the Graph API is used only to read insights. Posting and picking music stay manual
+  in the app, because no API can attach Instagram-library audio.
 
 ## Recipe sources & credit
 
-Recipe **settings** are factual parameters reproduced with attribution; article prose is **not** copied.
-Scraped recipes © **Fuji X Weekly / Ritchie Roesch** (`fujixweekly.com`); the Tri-X 400 recipe is by
-**Anders Lindborg**. Support the creators via the Fuji X Weekly app (350+ recipes). `Classic Negative
-C7` is J's own baseline recipe.
+Recipe **settings** are factual parameters, reproduced with attribution. Article text is **not**
+copied. Recipes © **Fuji X Weekly / Ritchie Roesch** (`fujixweekly.com`); the Tri-X 400 recipe is by
+**Anders Lindborg**. Please support the creators through the Fuji X Weekly app. `Classic Negative C7`
+is the owner's own baseline recipe.
 
 ---
-*Built for "J" — Fujifilm X100VI + OPPO Find N5, Singapore, every genre, the long arc to professional.*
+
+James Koh · [GitHub](https://github.com/gcjk768)
